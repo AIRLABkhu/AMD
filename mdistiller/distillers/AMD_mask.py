@@ -3,27 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ._base import Distiller
-from ._common import get_feat_shapes, SimpleAdapter
+from ._common import get_feat_shapes, SimpleAdapter, make_zscore_mask
 
-@torch.no_grad()
-def modified_zscore(data: torch.Tensor, threshold=3.5):
-    '''
-    data: batch, spatial, channel
-    '''
-    x = data.norm(dim=-1)  # batch, spatial
-    median = torch.median(x, dim=1, keepdim=True).values
-    mad = torch.median(torch.abs(x - median), dim=1, keepdim=True).values
-
-    modified_z = 0.6745 * (x - median) / mad
-    outlier_mask = torch.abs(modified_z) > threshold
-    return outlier_mask
-
-
-class AMD(Distiller):
+class AMD_MASK(Distiller):
     """Artifact Manipulating Distillation"""
     def __init__(self, student, teacher, cfg):
-        super(AMD, self).__init__(student, teacher)
-        self.align_loss_weight = cfg.AMD.LOSS.ALIGN_WIEGHT
+        super(AMD_MASK, self).__init__(student, teacher)
+        self.align_loss_weight = cfg.AMD.LOSS.ALIGN_WEIGHT
         self.feat_loss_weight = cfg.AMD.LOSS.FEAT_WEIGHT
         self.m_layers = cfg.AMD.M_LAYERS
         self.align_type = cfg.AMD.ALIGN_TYPE
@@ -44,7 +30,8 @@ class AMD(Distiller):
         self.af_threshold = cfg.AMD.AF.CRITERIA.THRES
 
     def get_learnable_parameters(self):
-        return super().get_learnable_parameters() + list(self.adapter_dict.parameters())
+        yield from super().get_learnable_parameters()
+        yield from self.adapter_dict.parameters()
 
     def get_extra_parameters(self):
         num_p = 0
@@ -59,16 +46,10 @@ class AMD(Distiller):
             
         # losses
         final_f_s = self.adapter_dict.adapter_fin(final_student)
-        match self.align_type:
-            case 'cosine':
-                loss_align = self.align_loss_weight * 0.5 * (1 - F.cosine_similarity(final_f_s, final_f_t, dim=-1).mean())
-            case 'mse':
-                loss_align = self.align_loss_weight * F.mse_loss(final_f_s, final_f_t)
-            case 'both':
-                loss_align = self.align_loss_weight * (0.5 * (1 - F.cosine_similarity(final_f_s, final_f_t, dim=-1).mean())
-                                                        + F.mse_loss(final_f_s, final_f_t))
-            case _:
-                raise NotImplementedError(self.align_type)
+        loss_align = self.align_loss_weight * (
+            0.5 * (1 - F.cosine_similarity(final_f_s, final_f_t, dim=-1).mean()) +
+            F.mse_loss(final_f_s, final_f_t)
+        )
 
         loss_feat = 0.0
         for m_l in self.m_layers:
@@ -77,7 +58,7 @@ class AMD(Distiller):
             if self.af_enabled:
                 match self.af_type:
                     case 'zscore':
-                        outlier_mask = modified_zscore(f_t, threshold=self.af_threshold)
+                        outlier_mask = make_zscore_mask(f_t, threshold=self.af_threshold)
                     case _:
                         raise NotImplementedError(self.af_type)
                 f_t[outlier_mask] = torch.nan
@@ -94,5 +75,4 @@ class AMD(Distiller):
 
         return torch.zeros(f_s.size(0), 1000, dtype=f_s.dtype, device=f_s.device), losses_dict
 
-    # def 
 

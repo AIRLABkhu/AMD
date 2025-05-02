@@ -1,3 +1,4 @@
+from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,18 +37,136 @@ class SimpleAdapter(nn.Module):
         out_features = t_features       
         hidden_features = hidden_features or in_features     
         self.fc1 = nn.Linear(in_features, out_features)       # Downconv
-        # self.act = act_layer()
-        # self.fc2 = nn.Linear(hidden_features, out_features)      # UPconv
-        # self.drop = nn.Dropout(drop)
 
     def forward(self, x):
         x = self.fc1(x)            
-        # x = self.act(x)            
-        # x = self.drop(x)
-        # x = self.fc2(x)           
-        # x = self.drop(x)   
         return x
 
+@torch.no_grad()
+def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=True, alpha: float=1.0):
+    '''
+    :input:
+        data: batch, spatial, channel
+        
+    :returns:
+        a tensor with shape (batch, spatial). 
+        contains one on outliers, zero, otherwise.
+    '''
+    x = data.norm(dim=-1)  # batch, spatial
+    median = torch.median(x, dim=1, keepdim=True).values
+    mad = torch.median(torch.abs(x - median), dim=1, keepdim=True).values
+    mad = torch.where(mad < 1e-6, torch.full_like(mad, 1e-6), mad)
+
+    modified_z = 0.6745 * (x - median) / mad
+    if adaptive:
+        std_z = modified_z.std(dim=1, keepdim=True)
+        threshold = (threshold * (1 + alpha * std_z)).clamp(max=6.0)
+        
+    outlier_mask = torch.abs(modified_z) > threshold
+    return outlier_mask.to(dtype=data.dtype, device=data.device)
+
+# reconMHA module
+class ReconMHA(nn.MultiheadAttention):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_patches: int,
+        num_heads: int,
+        base_threshold: float=5.5,
+        adaptive_threshold: bool=True,
+        inlier_recon_rate: float=0.1,
+        dropout: float = 0,
+        bias: bool = True,
+        add_bias_kv: bool = False,
+        add_zero_attn: bool = False,
+        kdim: int|None = None,
+        vdim: int|None = None,
+        batch_first: bool = True, 
+        device: Any|None = None,
+        dtype: Any|None = None,
+    ):
+        super().__init__(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            bias=bias,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+            kdim=kdim,
+            vdim=vdim,
+            batch_first=batch_first,
+            device=device,
+            dtype=dtype,
+        )
+        self.arguments = dict(
+            embed_dim=embed_dim,
+            num_patches=num_patches,
+            num_heads=num_heads,
+            base_threshold=base_threshold,
+            adaptive_threshold=adaptive_threshold,
+            inlier_recon_rate=inlier_recon_rate,
+            dropout=dropout,
+            bias=bias,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+            kdim=kdim,
+            vdim=vdim,
+            batch_first=batch_first,
+        )
+        self.recon_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        nn.init.trunc_normal_(self.recon_token, std=0.02)  # ViT-style initialization
+        self.base_threshold = base_threshold
+        self.adaptive_threshold = adaptive_threshold
+        self.inlier_recon_rate = inlier_recon_rate
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)  # ViT-style initialization
+        
+    def forward(self, x: torch.Tensor):
+        '''
+        :parameters:
+        
+            `x: torch.Tensor`: Tensor with shape of (batch, patch, channel).
+
+        :returns:
+        
+            `attn: tuple[torch.Tensor, torch.Tensor]`: 
+                The first tensor holds the attenion output and the second one holds the attention score matrix.
+            
+            `outlier_mask: torch.Tensor`: 
+                Stands for the binary floating-point tensor consists of 0 and 1 with shape of (batch, patch). 
+                One implies that the patch is an outlier.
+            
+            `random_mask: torch.Tensor`: 
+                Stands for the binary floating-point tensor consists of 0 and 1 with shape of (batch, batch). 
+                One implies that the patch is randomly selected to be masked. 
+                This will be returned only in the training mode. 
+        '''
+        outlier_mask = make_zscore_mask(
+            data=x, 
+            threshold=self.base_threshold, 
+            adaptive=self.adaptive_threshold,
+        ).unsqueeze(-1)
+        inlier_mask = 1 - outlier_mask
+        
+        if self.training:
+            inlier_indices = inlier_mask.squeeze(-1).nonzero()  # [(bidx, pidx), ...]
+            random_indices = inlier_indices[torch.rand(len(inlier_indices)) <= self.inlier_recon_rate]
+            random_mask = torch.sparse_coo_tensor(
+                random_indices.T, values=torch.ones(len(random_indices)), size=outlier_mask.shape[:2],
+                dtype=random_indices.dtype, device=random_indices.device,
+            ).to_dense().unsqueeze(-1)
+            x_ready = torch.add(
+                x * (inlier_mask - random_mask),
+                self.recon_token * (outlier_mask + random_mask),
+            )
+        else:
+            x_ready = (x * inlier_mask) + (self.recon_token * outlier_mask)
+        
+        x_ready = x_ready + self.pos_embed
+        if self.training:
+            return super().forward(x_ready, x_ready, x_ready), outlier_mask, random_mask
+        else:
+            return super().forward(x_ready, x_ready, x_ready), outlier_mask
 
 
 def get_feat_shapes(student, teacher, input_size):

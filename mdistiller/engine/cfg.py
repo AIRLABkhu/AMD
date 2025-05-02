@@ -80,16 +80,19 @@ CFG.LOG.WANDB = False
 
 """Artifact Manipulating Distillation"""
 CFG.AMD = CN()
-CFG.AMD.M_LAYERS = [5] # manipulating layers
-CFG.AMD.ALIGN_TYPE = 'cosine' # 'cosine', 'mse', 'both'
+CFG.AMD.M_LAYERS = [5]  # manipulating layers
+CFG.AMD.ALIGN_TYPE = 'cosine'  # 'cosine', 'mse', 'both'
 CFG.AMD.INPUT_SIZE = [224, 224]
 CFG.AMD.AF = CN()
 CFG.AMD.AF.ENABLE = False
 CFG.AMD.AF.CRITERIA = CN()
 CFG.AMD.AF.CRITERIA.TYPE = 'zscore'
 CFG.AMD.AF.CRITERIA.THRES = 3.5
+CFG.AMD.AF.RECON = CN()
+CFG.AMD.AF.RECON.TYPE = 'recon_mha'  #'recon_mha'
 CFG.AMD.LOSS = CN()
-CFG.AMD.LOSS.ALIGN_WIEGHT = 1.0
+CFG.AMD.LOSS.ALIGN_WEIGHT = 1.0
+CFG.AMD.LOSS.RECON_WEIGHT = 1.0
 CFG.AMD.LOSS.FEAT_WEIGHT = 100.0
 
 
