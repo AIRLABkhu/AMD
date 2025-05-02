@@ -44,7 +44,6 @@ class AMD_MASK(Distiller):
         with torch.no_grad():
             _, feature_teacher = self.teacher.forward_wohead(image)
             
-
         loss_feat = 0.0
         for m_l in self.m_layers:
             f_s = feature_student["feats"][m_l]
@@ -55,12 +54,16 @@ class AMD_MASK(Distiller):
                         outlier_mask = make_zscore_mask(f_t, threshold=self.af_threshold)
                     case _:
                         raise NotImplementedError(self.af_type)
-                outlier_bool_mask = outlier_mask.bool()
-                f_s[outlier_bool_mask] = torch.nan
-                f_t[outlier_bool_mask] = torch.nan
-                loss_feat = loss_feat + torch.square(f_s - f_t).nanmean() # TODO: NaN-ignoring cosine similarity
+                inlier_bool_mask = outlier_mask.bool().logical_not()
+                f_s_inliers = f_s[inlier_bool_mask]
+                f_t_inliers = f_t[inlier_bool_mask]
+                loss_feat_mse = F.mse_loss(f_s_inliers, f_t_inliers)
+                loss_feat_cos = 0.5 * (1 - F.cosine_similarity(f_s_inliers, f_t_inliers, dim=-1).mean())
+                loss_feat = loss_feat + loss_feat_mse + loss_feat_cos
             else:
-                loss_feat = loss_feat + F.mse_loss(f_s, f_t) + 0.5 * (1 - F.cosine_similarity(f_s, f_t, dim=-1).mean())
+                loss_feat = loss_feat + \
+                    F.mse_loss(f_s, f_t) + \
+                    0.5 * (1 - F.cosine_similarity(f_s, f_t, dim=-1).mean())
         loss_feat = self.feat_loss_weight * loss_feat / len(self.m_layers) 
 
         losses_dict = {
