@@ -1,6 +1,6 @@
 EXPERIMENT:
   NAME: ""
-  TAG: "amd-masking,deit3-base,deit3-small,layer7,both"
+  TAG: "amd-mask,deit3-base,deit3-small,layer7,both"
   PROJECT: "deit3_baselines"
 DATASET:
   TYPE: "imagenet"
@@ -8,7 +8,7 @@ DATASET:
   TEST:
     BATCH_SIZE: 128
 DISTILLER:
-  TYPE: "AMD"
+  TYPE: "AMD_MASK"
   TEACHER: "deit3_base"
   STUDENT: "deit3_small"
 SOLVER:
