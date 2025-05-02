@@ -1,0 +1,34 @@
+EXPERIMENT:
+  NAME: ""
+  TAG: "amd-masking,deit3-base,deit3-small,layer7,both"
+  PROJECT: "deit3_baselines"
+DATASET:
+  TYPE: "imagenet"
+  NUM_WORKERS: 32
+  TEST:
+    BATCH_SIZE: 128
+DISTILLER:
+  TYPE: "AMD"
+  TEACHER: "deit3_base"
+  STUDENT: "deit3_small"
+SOLVER:
+  BATCH_SIZE: 512
+  EPOCHS: 100
+  LR: 0.2
+  SGD:
+    MOMENTUM: 0.9
+  SCHEDULE: 
+    MULTISTEP:
+      STAGES: [30, 60, 90]
+      RATE: 0.1
+  WEIGHT_DECAY: 0.0001
+  TYPE: "SGD"
+LOG:
+  TENSORBOARD_FREQ: 50
+  SAVE_CHECKPOINT_FREQ: 10
+AMD:
+  M_LAYERS: [7]
+  ALIGN_TYPE: 'both'
+  INPUT_SIZE: [224, 224]
+  AF:
+    ENABLE: True

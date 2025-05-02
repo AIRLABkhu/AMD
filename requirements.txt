@@ -1,0 +1,10 @@
+torch==2.6.0
+torchvision==0.21.0
+tensorboard-logger==0.1.0
+yacs
+wandb
+tqdm
+tensorboardX
+mat73
+albumentations
+einops

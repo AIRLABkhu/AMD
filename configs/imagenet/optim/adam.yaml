@@ -1,0 +1,11 @@
+SOLVER:
+  TYPE: "Adam"
+  LR: 1.0E-3
+  ADAM:
+    BETAS: [0.9, 0.999]
+    EPSILON: 1.0E-8
+  SCHEDULE:
+    TYPE: 'COSINE'
+    COSINE:
+      WARMUP: 5
+      RATE: 1.0E-4
