@@ -30,46 +30,48 @@ class AMD_RECON(Distiller):
             }
         })
         # Recon Module
-        if (self.af_enabled) & (self.af_recon_type == 'recon_mha'):
-            self.recon_module_dict = nn.ModuleDict({
-            **{
-                f"recon_mha_{m_l:03d}": ReconMHA(embed_dim=self.teacher.embed_dim,
-                                                 num_patches=self.teacher.patch_embed.num_patches+1,
-                                                 num_heads=int(self.teacher.embed_dim/64),
-                                                 base_threshold=self.af_threshold)
-                for m_l in self.m_layers
-            }
-        })
+        if self.af_enabled:
+            match self.af_recon_type:
+                case 'recon_mha':
+                    self.reconstructor_dict = nn.ModuleDict({
+                        **{
+                            f"recon_mha_{m_l:03d}": ReconMHA(embed_dim=self.teacher.embed_dim,
+                                                            num_patches=self.teacher.patch_embed.num_patches+1,
+                                                            num_heads=self.teacher.embed_dim // 64,
+                                                            base_threshold=self.af_threshold)
+                            for m_l in self.m_layers
+                        }
+                    })
+                case _:
+                    self.reconstructor_dict = nn.Identity()
 
     def get_learnable_parameters(self):
-        if self.af_enabled & (self.af_recon_type == 'recon_mha'):
-            return super().get_learnable_parameters() + list(self.adapter_dict.parameters()) + list(self.recon_module_dict.parameters())
-        else:
-            return super().get_learnable_parameters() + list(self.adapter_dict.parameters())
+        yield from super().get_learnable_parameters()
+        yield from self.adapter_dict.parameters()
+        yield from self.reconstructor_dict.parameters()
 
     def get_extra_parameters(self):
-        num_p = 0
-        for p in self.adapter_dict.parameters():
-            num_p += p.numel()
-        if self.af_enabled & (self.af_recon_type == 'recon_mha'):
-            for p in self.recon_module_dict.parameters():
-                num_p += p.numel()
-        return num_p
+        return sum(
+            sum(map(torch.Tensor.numel, module.parameters()))
+            for module in [
+                self.adapter_dict,
+                self.reconstructor_dict,
+            ]
+        )
 
     def forward_train(self, image, target, **kwargs):
         _, feature_student = self.student.forward_wohead(image)
         with torch.no_grad():
             _, feature_teacher = self.teacher.forward_wohead(image)
         # loss
-        # loss for inter feature
-        loss_feat = 0.0
-        loss_recon = 0.0
+        ## loss for inter feature
+        loss_feat, loss_recon = 0.0, 0.0
         for m_l in self.m_layers:
             f_s = feature_student["feats"][m_l]
             f_t = feature_teacher["feats"][m_l]
             match self.af_recon_type:
                 case 'recon_mha':
-                    (recon_f_t, _) , outlier_mask, random_mask = self.recon_module_dict[f"recon_mha_{m_l:03d}"](f_t)
+                    (recon_f_t, _) , outlier_mask, _ = self.reconstructor_dict[f"recon_mha_{m_l:03d}"](f_t)
                     proj_f_t = self.adapter_dict[f"adapter_{m_l:03d}"](recon_f_t)
                     match self.align_type:
                         case 'cosine':
@@ -81,8 +83,9 @@ class AMD_RECON(Distiller):
                                                     + F.mse_loss(f_s, proj_f_t))
                         case _:
                             raise NotImplementedError(self.align_type)
-                    f_t[outlier_mask] = torch.nan
-                    recon_f_t[outlier_mask] = torch.nan
+                    outlier_bool_mask = outlier_mask.bool().squeeze()
+                    f_t[outlier_bool_mask] = torch.nan
+                    recon_f_t[outlier_bool_mask] = torch.nan
                     loss_recon = loss_recon + torch.square(recon_f_t - f_t).nanmean()
                 case _:
                     raise NotImplementedError(self.align_type)

@@ -37,20 +37,13 @@ class SimpleAdapter(nn.Module):
         out_features = t_features       
         hidden_features = hidden_features or in_features     
         self.fc1 = nn.Linear(in_features, out_features)       # Downconv
-        # self.act = act_layer()
-        # self.fc2 = nn.Linear(hidden_features, out_features)      # UPconv
-        # self.drop = nn.Dropout(drop)
 
     def forward(self, x):
         x = self.fc1(x)            
-        # x = self.act(x)            
-        # x = self.drop(x)
-        # x = self.fc2(x)           
-        # x = self.drop(x)   
         return x
 
 @torch.no_grad()
-def modified_zscore(data: torch.Tensor, threshold: float=5.5):
+def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=True, alpha: float=1.0):
     '''
     :input:
         data: batch, spatial, channel
@@ -65,30 +58,12 @@ def modified_zscore(data: torch.Tensor, threshold: float=5.5):
     mad = torch.where(mad < 1e-6, torch.full_like(mad, 1e-6), mad)
 
     modified_z = 0.6745 * (x - median) / mad
+    if adaptive:
+        std_z = modified_z.std(dim=1, keepdim=True)
+        threshold = (threshold * (1 + alpha * std_z)).clamp(max=6.0)
+        
     outlier_mask = torch.abs(modified_z) > threshold
     return outlier_mask.to(dtype=data.dtype, device=data.device)
-
-@torch.no_grad()
-def modified_zscore_adaptive(data: torch.Tensor, base_threshold: float=5.5, alpha: float=1.0):
-    '''
-    :input:
-        data: batch, spatial, channel
-        
-    :returns:
-        a tensor with shape (batch, spatial). 
-        contains one on outliers, zero, otherwise.
-    '''
-    x = data.norm(dim=-1)  # (B, S)
-    median = torch.median(x, dim=1, keepdim=True).values
-    mad = torch.median(torch.abs(x - median), dim=1, keepdim=True).values + 1e-6
-    modified_z = 0.6745 * (x - median) / mad  # (B, S)
-
-    std_z = modified_z.std(dim=1, keepdim=True)  # (B, 1)
-    adaptive_threshold = (base_threshold * (1 + alpha * std_z)).clamp(max=6.0)  # (B, 1)
-
-    outlier_mask = torch.abs(modified_z) > adaptive_threshold
-    return outlier_mask.to(dtype=torch.int64, device=data.device)
-
 
 # reconMHA module
 class ReconMHA(nn.MultiheadAttention):
@@ -166,10 +141,11 @@ class ReconMHA(nn.MultiheadAttention):
                 One implies that the patch is randomly selected to be masked. 
                 This will be returned only in the training mode. 
         '''
-        if self.adaptive_threshold:
-            outlier_mask = modified_zscore_adaptive(x, base_threshold=self.base_threshold).unsqueeze(-1)
-        else:
-            outlier_mask = modified_zscore(x, threshold=self.base_threshold).unsqueeze(-1)
+        outlier_mask = make_zscore_mask(
+            data=x, 
+            threshold=self.base_threshold, 
+            adaptive=self.adaptive_threshold,
+        ).unsqueeze(-1)
         inlier_mask = 1 - outlier_mask
         
         if self.training:
