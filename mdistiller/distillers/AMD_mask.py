@@ -47,7 +47,7 @@ class AMD_MASK(Distiller):
         loss_feat = 0.0
         for m_l in self.m_layers:
             f_s = feature_student["feats"][m_l]
-            f_t = self.adapter_dict[f"adapter_{m_l:03d}"](feature_teacher["feats"][m_l])
+            f_t = feature_teacher["feats"][m_l]
             if self.af_enabled:
                 match self.af_type:
                     case 'zscore':
@@ -55,15 +55,15 @@ class AMD_MASK(Distiller):
                     case _:
                         raise NotImplementedError(self.af_type)
                 inlier_bool_mask = outlier_mask.bool().logical_not()
+                f_t = self.adapter_dict[f"adapter_{m_l:03d}"](f_t)
                 f_s_inliers = f_s[inlier_bool_mask]
                 f_t_inliers = f_t[inlier_bool_mask]
                 loss_feat_mse = F.mse_loss(f_s_inliers, f_t_inliers)
-                loss_feat_cos = 0.5 * (1 - F.cosine_similarity(f_s_inliers, f_t_inliers, dim=-1).mean())
-                loss_feat = loss_feat + loss_feat_mse + loss_feat_cos
+                # loss_feat_cos = 0.5 * (1 - F.cosine_similarity(f_s_inliers, f_t_inliers, dim=-1).mean())
+                loss_feat = loss_feat + loss_feat_mse
             else:
-                loss_feat = loss_feat + \
-                    F.mse_loss(f_s, f_t) + \
-                    0.5 * (1 - F.cosine_similarity(f_s, f_t, dim=-1).mean())
+                f_t = self.adapter_dict[f"adapter_{m_l:03d}"](f_t)
+                loss_feat = loss_feat + F.mse_loss(f_s, f_t)
         loss_feat = self.feat_loss_weight * loss_feat / len(self.m_layers) 
 
         losses_dict = {

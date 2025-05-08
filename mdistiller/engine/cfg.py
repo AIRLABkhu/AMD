@@ -10,9 +10,9 @@ def dump_cfg(cfg, show: bool=False):
     dump.SOLVER = cfg.SOLVER
     dump.LOG = cfg.LOG
     
-    if cfg.DISTILLER.TYPE.startswith('SRMD.'):
-        dump.SRMD = cfg.SRMD
-        distiller_type = cfg.DISTILLER.TYPE[5:]
+    if cfg.DISTILLER.TYPE.startswith('AMD_'):
+        dump.AMD = cfg.AMD
+        distiller_type = cfg.DISTILLER.TYPE[4:]
     else:
         distiller_type = cfg.DISTILLER.TYPE
     if distiller_type in cfg:
