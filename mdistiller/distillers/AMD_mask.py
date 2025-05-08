@@ -59,7 +59,6 @@ class AMD_MASK(Distiller):
                 f_s_inliers = f_s[inlier_bool_mask]
                 f_t_inliers = f_t[inlier_bool_mask]
                 loss_feat_mse = F.mse_loss(f_s_inliers, f_t_inliers)
-                # loss_feat_cos = 0.5 * (1 - F.cosine_similarity(f_s_inliers, f_t_inliers, dim=-1).mean())
                 loss_feat = loss_feat + loss_feat_mse
             else:
                 f_t = self.adapter_dict[f"adapter_{m_l:03d}"](f_t)
