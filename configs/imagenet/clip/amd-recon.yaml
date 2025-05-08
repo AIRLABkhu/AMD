@@ -1,14 +1,14 @@
 EXPERIMENT:
   NAME: ""
-  TAG: "amd,clip-base,vit-tiny,layer7,both"
-  PROJECT: "CLIP_AMD"
+  TAG: "amd-recon,clip-base,vit-tiny,layer7,mse,recon-weight-100"
+  PROJECT: "clip_baselines"
 DATASET:
   TYPE: "imagenet"
   NUM_WORKERS: 32
   TEST:
     BATCH_SIZE: 128
 DISTILLER:
-  TYPE: "AMD"
+  TYPE: "AMD_RECON"
   TEACHER: "clip_base"
   STUDENT: "vit_tiny"
 SOLVER:
@@ -17,7 +17,7 @@ SOLVER:
   LR: 0.2
   SGD:
     MOMENTUM: 0.9
-  SCHEDULE:
+  SCHEDULE: 
     MULTISTEP:
       STAGES: [30, 60, 90]
       RATE: 0.1
@@ -28,6 +28,14 @@ LOG:
   SAVE_CHECKPOINT_FREQ: 10
 AMD:
   M_LAYERS: [7]
-  ALIGN_TYPE: 'both'
+  ALIGN_TYPE: 'mse'
+  INPUT_SIZE: [224, 224]
   AF:
     ENABLE: True
+    CRITERIA:
+      THRES: 5.5
+    RECON:
+      TYPE: 'recon_mha'
+  LOSS:
+    RECON_WEIGHT: 100.0
+    FEAT_WEIGHT: 100.0
