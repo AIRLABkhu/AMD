@@ -20,6 +20,32 @@ from tools.lineval.utils import (
     prepare_lineval_dir,
     load_from_checkpoint,
 )
+    
+# Utility
+def crop_resize(x: torch.Tensor, size: int, random_crop: bool=False):
+    shorter = min(x.shape[-2:])
+    x_cropped = center_crop(x, shorter)
+    if random_crop:
+        crop_size = int(shorter * 0.8)
+        low = np.random.randint(0, shorter - crop_size - 1, size=(2,))
+        high = low + crop_size
+        x_cropped = x[..., low[0]:high[0], low[1]:high[1]]
+    x_resized = resize(x_cropped, (size, size))
+    return x_resized
+
+def restore_depth_map(x: torch.Tensor, size: tuple[int, int]):
+    return resize(x, size)
+
+def patches_to_depth(x: torch.Tensor):
+    _, num_patches, embed_dim = x.shape
+    patch_rows = int(num_patches**0.5)
+    pixel_rows = int(embed_dim**0.5)
+    return einops.rearrange(
+        x[:, -patch_rows*patch_rows:],
+        'b (ph pw) (h w) -> b (ph h) (pw w)',
+        ph=patch_rows, pw=patch_rows,
+        h=pixel_rows, w=pixel_rows,
+    )
 
 
 if __name__ == '__main__':
@@ -59,32 +85,6 @@ if __name__ == '__main__':
         T_max=EPOCHS*len(train_loader),
         eta_min=1.0E-8,
     )
-    
-    # Utility
-    def crop_resize(x: torch.Tensor, size: int, random_crop: bool=False):
-        shorter = min(x.shape[-2:])
-        x_cropped = center_crop(x, shorter)
-        if random_crop:
-            crop_size = int(shorter * 0.8)
-            low = np.random.randint(0, shorter - crop_size - 1, size=(2,))
-            high = low + crop_size
-            x_cropped = x[..., low[0]:high[0], low[1]:high[1]]
-        x_resized = resize(x_cropped, (size, size))
-        return x_resized
-
-    def restore_depth_map(x: torch.Tensor, size: tuple[int, int]):
-        return resize(x, size)
-
-    def patches_to_depth(x: torch.Tensor):
-        _, num_patches, embed_dim = x.shape
-        patch_rows = int(num_patches**0.5)
-        pixel_rows = int(embed_dim**0.5)
-        return einops.rearrange(
-            x[:, -patch_rows*patch_rows:],
-            'b (ph pw) (h w) -> b (ph h) (pw w)',
-            ph=patch_rows, pw=patch_rows,
-            h=pixel_rows, w=pixel_rows,
-        )
     
     # Training Loop
     best_rmse = torch.inf
@@ -169,7 +169,7 @@ if __name__ == '__main__':
                 for key, val in head.state_dict().items()
             },
         )
-        if test_rmse > best_rmse:
+        if test_rmse < best_rmse:
             best_rmse = test_rmse
             torch.save(ckpt, str(best_filename))
         torch.save(ckpt, str(last_filename))

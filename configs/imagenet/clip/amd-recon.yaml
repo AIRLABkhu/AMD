@@ -1,6 +1,6 @@
 EXPERIMENT:
   NAME: ""
-  TAG: "amd-recon,clip-base,vit-tiny,layer7,mse,recon-weight-100"
+  TAG: "s2t,amd-recon,clip-base,vit-tiny,layer7,mse,recon-weight-100"
   PROJECT: "clip_baselines"
 DATASET:
   TYPE: "imagenet"

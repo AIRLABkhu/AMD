@@ -28,7 +28,7 @@ def prepare_lineval_dir(
 ):
     lineval_dir = Path('output').joinpath(exp_name, 'lineval')
     nowstr = datetime.now().strftime('_%y%m%d_%H%M%S')
-    log_dir = lineval_dir.joinpath(tag, dataset + nowstr)
+    log_dir = lineval_dir.joinpath(str(tag), dataset + nowstr)
     log_dir.mkdir(parents=True)
     
     if args is not None:

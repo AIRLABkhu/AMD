@@ -15,10 +15,10 @@ class AMD_MASK(Distiller):
         feat_s_shapes, feat_t_shapes = get_feat_shapes(
             self.student, self.teacher, cfg.AMD.INPUT_SIZE
         )
-        # Adapters from Teacher to Student
+        # Adapters from Student to Teacher
         self.adapter_dict = nn.ModuleDict({
             **{
-                f"adapter_{m_l:03d}": SimpleAdapter(feat_t_shapes[m_l][-1], feat_s_shapes[m_l][-1])
+                f"adapter_{m_l:03d}": SimpleAdapter(feat_s_shapes[m_l][-1], feat_t_shapes[m_l][-1])
                 for m_l in self.m_layers
             }
         })
@@ -55,13 +55,13 @@ class AMD_MASK(Distiller):
                     case _:
                         raise NotImplementedError(self.af_type)
                 inlier_bool_mask = outlier_mask.bool().logical_not()
-                f_t = self.adapter_dict[f"adapter_{m_l:03d}"](f_t)
+                f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
                 f_s_inliers = f_s[inlier_bool_mask]
                 f_t_inliers = f_t[inlier_bool_mask]
                 loss_feat_mse = F.mse_loss(f_s_inliers, f_t_inliers)
                 loss_feat = loss_feat + loss_feat_mse
             else:
-                f_t = self.adapter_dict[f"adapter_{m_l:03d}"](f_t)
+                f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
                 loss_feat = loss_feat + F.mse_loss(f_s, f_t)
         loss_feat = self.feat_loss_weight * loss_feat / len(self.m_layers) 
 
