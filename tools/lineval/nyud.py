@@ -45,17 +45,19 @@ def crop_resize(*x: tuple[torch.Tensor, ...], size: int, random_crop: bool=False
     return x_resized
 
 def get_binned_target(depth_map, num_bins=256):
-    # normed = (depth_map - min_depth) / (max_depth - min_depth)
     normed = torch.clamp(depth_map, 0, 1)
     binned = (normed * (num_bins - 1)).round().long()
     return binned
 
 def depth_from_logit(logit, min_depth=0.5, max_depth=10.0):
-    # softmax + weighted sum
-    prob = F.softmax(logit, dim=1)
+    logit_max = logit.argmax(dim=1)
+    logit_hard = nn.functional.one_hot(logit_max, dim=1)
+    logit_hard = logit_hard.permute(0, 3, 1, 2)
+    
+    logit_hard = logit_hard - logit.detach() + logit  # with gradient
     num_bins = logit.size(1)
     bins = torch.linspace(min_depth, max_depth, num_bins, device=logit.device).reshape(1, -1, 1, 1)
-    depth = (prob * bins).sum(dim=1)
+    depth = (logit_hard * bins).sum(dim=1)
     return depth
 
 
@@ -65,7 +67,6 @@ class DepthEstimator(nn.Module):
         self.upsample_factor = upsample_factor
         self.num_bins = num_bins
         self.head = nn.Conv2d(embed_dim * 2, num_bins, kernel_size=1)
-        # self.head = nn.Linear(embed_dim * 2, num_bins)
 
     def forward(self, feat: torch.Tensor):
         """
@@ -82,12 +83,16 @@ class DepthEstimator(nn.Module):
         patch_cls = torch.cat([patch_tokens, cls_repeated], dim=-1)  # (B, N, 2C)
         patch_2d = einops.rearrange(patch_cls, 'B (H W) C -> B H W C', H=H)
 
-        upsampled = F.interpolate(patch_2d.permute(0, 3, 1, 2), scale_factor=self.upsample_factor, mode='bilinear', align_corners=False)  # (B, 2C, H*16, W*16)
-        # upsampled = upsampled.permute(0, 2, 3, 1)  # (B, H', W', 2C)
+        upsampled = F.interpolate(
+            patch_2d.permute(0, 3, 1, 2),
+            scale_factor=self.upsample_factor,
+            mode='bilinear',
+            align_corners=False,
+        )  # (B, 2C, H*16, W*16)
         pred = self.head(upsampled)               # (B, num_bins, H', W')
-        # pred = pred.permute(0, 3, 1, 2)           # (B, num_bins, H', W')
         return pred
-    
+
+
 def main(args: Namespace):
     rank = int(os.environ['LOCAL_RANK'])
     IS_MASTER = bool(int(os.environ['IS_MASTER_NODE']))
@@ -115,20 +120,12 @@ def main(args: Namespace):
     model: ModelBase = model.cuda(DEVICE)
     depth_resolution = 256
     head = DepthEstimator(model.embed_dim, upsample_factor=16).cuda(DEVICE)
-    # head = torch.nn.Linear(model.embed_dim*2, depth_resolution).cuda(DEVICE)
     
     model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
     head = nn.parallel.DistributedDataParallel(head, device_ids=[rank])
-    # optimizer = optim.SGD(
-    #     head.parameters(),
-    #     lr=args.learning_rate,
-    #     weight_decay=args.weight_decay,
-    # )
-    optimizer = torch.optim.AdamW(
-        params=head.parameters(),
+    optimizer = optim.SGD(
+        head.parameters(),
         lr=args.learning_rate,
-        betas=(0.9, 0.999),
-        eps=1.0e-8,
         weight_decay=args.weight_decay,
     )
     scheduler = lr_scheduler.CosineAnnealingLR(
@@ -153,15 +150,13 @@ def main(args: Namespace):
 
                 loss = F.cross_entropy(pred_logit, target_binned)
                 loss.backward()
-                # if IS_MASTER: print(head.module.weight.grad.norm(), f'{loss:.8f}')
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
-                # if IS_MASTER: print(head.module.weight.grad.norm(), f'{loss:.8f}')
                 
                 with torch.no_grad():
                     pred_depth = depth_from_logit(pred_logit)
-                    target_depth = 0.5 + target * 9.5 # for real depth from normalized target min 0.5m max 10m
+                    target_depth = 0.5 + target * 9.5  # for real depth from normalized target min 0.5m max 10m
                     loss = torch.nn.functional.cross_entropy(pred_logit, target_binned.to(DEVICE), reduction='none')
                     loss_all = dist_fn.gather(loss)
                     local_rmse = torch.square(pred_depth - target_depth.to(DEVICE)).flatten(1).mean(dim=1).sqrt()
