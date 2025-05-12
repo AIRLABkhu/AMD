@@ -49,12 +49,15 @@ def get_binned_target(depth_map, num_bins=256):
     binned = (normed * (num_bins - 1)).round().long()
     return binned
 
-def depth_from_logit(logit, min_depth=0.5, max_depth=10.0):
-    logit_max = logit.argmax(dim=1)
-    logit_hard = nn.functional.one_hot(logit_max, dim=1)
-    logit_hard = logit_hard.permute(0, 3, 1, 2)
-    
-    logit_hard = logit_hard - logit.detach() + logit  # with gradient
+def depth_from_logit(logit, min_depth=0.5, max_depth=10.0, soft: bool=True, temperature: float=0.03):
+    if soft:
+        logit_hard = (logit / temperature).softmax(dim=1)
+    else:
+        logit_max = logit.argmax(dim=1)
+        logit_hard = nn.functional.one_hot(logit_max, num_classes=256)
+        logit_hard = logit_hard.permute(0, 3, 1, 2)
+        logit_hard = logit_hard - logit.detach() + logit  # with gradient
+        
     num_bins = logit.size(1)
     bins = torch.linspace(min_depth, max_depth, num_bins, device=logit.device).reshape(1, -1, 1, 1)
     depth = (logit_hard * bins).sum(dim=1)
