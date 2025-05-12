@@ -149,12 +149,10 @@ class ADE20K(Dataset):
         annot_fname = f'{self.annot_dir}{os.sep}{self.filenames[index]}.png'
 
         image = np.asarray(Image.open(image_fname).convert('RGB')).astype(np.float32)
-        label = np.asarray(Image.open(annot_fname), dtype=np.int32) - 1  # from -1 to 149
+        label = np.asarray(Image.open(annot_fname), dtype=np.int32).astype(np.int64) - 1  # from -1 to 149
         
         output = self.transform(image=image, label=label)
-        image: np.ndarray = output['image']
-        label: np.ndarray = output['label']
-        return image, label
+        return output['image'], output['label']
 
 
 def get_ade_20k_val_loader(val_batch_size, use_ddp, mean=MEAN, std=STD, img_size: int=224):
