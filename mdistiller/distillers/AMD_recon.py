@@ -22,10 +22,10 @@ class AMD_RECON(Distiller):
         self.af_threshold = cfg.AMD.AF.CRITERIA.THRES
         self.af_recon_type = cfg.AMD.AF.RECON.TYPE
         
-        # Adapters from Teacher to Student
+        # Adapters from Student to Teacher
         self.adapter_dict = nn.ModuleDict({
             **{
-                f"adapter_{m_l:03d}": SimpleAdapter(feat_t_shapes[m_l][-1], feat_s_shapes[m_l][-1])
+                f"adapter_{m_l:03d}": SimpleAdapter(feat_s_shapes[m_l][-1], feat_t_shapes[m_l][-1])
                 for m_l in self.m_layers
             }
         })
@@ -72,21 +72,23 @@ class AMD_RECON(Distiller):
             match self.af_recon_type:
                 case 'recon_mha':
                     (recon_f_t, _) , outlier_mask, _ = self.reconstructor_dict[f"recon_mha_{m_l:03d}"](f_t)
-                    proj_f_t = self.adapter_dict[f"adapter_{m_l:03d}"](recon_f_t)
+                    proj_f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
                     match self.align_type:
                         case 'cosine':
-                            loss_feat = loss_feat + 0.5 * (1 - F.cosine_similarity(f_s, proj_f_t, dim=-1).mean())
+                            loss_feat = loss_feat + 0.5 * (1 - F.cosine_similarity(proj_f_s, recon_f_t, dim=-1).mean())
                         case 'mse':
-                            loss_feat = loss_feat + F.mse_loss(f_s, proj_f_t)
+                            loss_feat = loss_feat + F.mse_loss(proj_f_s, recon_f_t)
                         case 'both':
-                            loss_feat = loss_feat + (0.5 * (1 - F.cosine_similarity(f_s, proj_f_t, dim=-1).mean())
-                                                    + F.mse_loss(f_s, proj_f_t))
+                            loss_feat = loss_feat + (0.5 * (1 - F.cosine_similarity(proj_f_s, recon_f_t, dim=-1).mean())
+                                                    + F.mse_loss(proj_f_s, recon_f_t))
                         case _:
                             raise NotImplementedError(self.align_type)
                     outlier_bool_mask = outlier_mask.bool().squeeze()
-                    f_t[outlier_bool_mask] = torch.nan
-                    recon_f_t[outlier_bool_mask] = torch.nan
-                    loss_recon = loss_recon + torch.square(recon_f_t - f_t).nanmean()
+                    f_t_masked = f_t.clone()
+                    f_t_masked[outlier_bool_mask] = torch.nan
+                    recon_f_t_masked = recon_f_t.clone()
+                    recon_f_t_masked[outlier_bool_mask] = torch.nan
+                    loss_recon = loss_recon + torch.square(recon_f_t_masked - f_t_masked).nanmean()
                 case _:
                     raise NotImplementedError(self.align_type)
                 

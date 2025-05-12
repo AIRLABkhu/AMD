@@ -1,6 +1,6 @@
 EXPERIMENT:
   NAME: ""
-  TAG: "s2t,amd-recon,clip-base,vit-tiny,layer7,mse,recon-weight-100"
+  TAG: "s2t,base,clip-base,vit-tiny,layer7,mse"
   PROJECT: "clip_baselines"
 DATASET:
   TYPE: "imagenet"
@@ -8,7 +8,7 @@ DATASET:
   TEST:
     BATCH_SIZE: 128
 DISTILLER:
-  TYPE: "AMD_RECON"
+  TYPE: "AMD_MASK"
   TEACHER: "clip_base"
   STUDENT: "vit_tiny"
 SOLVER:
@@ -28,14 +28,8 @@ LOG:
   SAVE_CHECKPOINT_FREQ: 10
 AMD:
   M_LAYERS: [7]
-  ALIGN_TYPE: 'mse'
   INPUT_SIZE: [224, 224]
   AF:
-    ENABLE: True
-    CRITERIA:
-      THRES: 5.5
-    RECON:
-      TYPE: 'recon_mha'
+    ENABLE: False
   LOSS:
-    RECON_WEIGHT: 100.0
     FEAT_WEIGHT: 100.0

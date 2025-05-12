@@ -1,6 +1,6 @@
 EXPERIMENT:
   NAME: ""
-  TAG: "amd-mask,clip-base,vit-tiny,layer7,mse"
+  TAG: "s2t,amd-mask,clip-base,vit-tiny,layer7,mse"
   PROJECT: "clip_baselines"
 DATASET:
   TYPE: "imagenet"
