@@ -62,7 +62,7 @@ def main(args: Namespace):
         _, log_filename, best_filename, last_filename = prepare_lineval_dir(
             args.expname, 
             tag=str(args.tag), 
-            dataset='nyud', 
+            dataset='ade20k', 
             args=vars(args)
         )
     
