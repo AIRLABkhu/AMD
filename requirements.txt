@@ -8,3 +8,4 @@ tensorboardX
 mat73
 albumentations
 einops
+torchmetrics

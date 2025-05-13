@@ -39,3 +39,12 @@
     ```
 
 4. Check MD5 sum (`b81c4d8db95d62487356fdc73ccd3728`)
+
+### ADE-20K
+
+1. Download the dataset from [MIT](http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip).
+    ```bash
+    wget http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip
+    ```
+
+2. No further steps is needed.
