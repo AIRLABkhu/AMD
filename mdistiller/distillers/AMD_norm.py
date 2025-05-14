@@ -3,7 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ._base import Distiller
-from ._common import get_feat_shapes, SimpleAdapter, make_zscore_mask, make_gaussian_std_mask, normalize_outlier_artifacts
+from ._common import (
+    get_feat_shapes,
+    SimpleAdapter,
+    make_zscore_mask,
+    make_gaussian_std_mask,
+    normalize_outlier_artifacts,
+)
 
 class AMD_NORM(Distiller):
     """Artifact Manipulating Distillation"""
