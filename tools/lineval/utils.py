@@ -64,6 +64,22 @@ def load_from_checkpoint(
     result = model.load_state_dict(ckpt['model'], strict=False)
     return model, result
 
+def load_head_checkpoint(
+    exp_name: str,
+    tag: Literal['latest', 'best']|int='latest',
+    dataset: Literal['imagenet', 'nyud', 'ade20k']='nyud',
+    when: str|None=None,
+    lineval_tag: Literal['last', 'best']|int='last',
+):
+    filename = os.path.join('output', exp_name, 'lineval', tag)
+    if when is None:
+        dirname = sorted(filter(lambda x: x.startswith(f'{dataset}_'), os.listdir(filename)))[-1]
+        filename = os.path.join(filename, dirname)
+    else:
+        filename = os.path.join(filename, f'{dataset}_{when}')
+    filename = os.path.join(filename, f'{lineval_tag}.pt')
+    return torch.load(filename, weights_only=False, map_location='cpu')
+
 
 if __name__ == '__main__':
     model, result = load_from_checkpoint('imagenet_baselines/fitnet,res34,res18', tag='latest')
