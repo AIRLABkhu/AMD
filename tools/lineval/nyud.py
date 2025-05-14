@@ -1,7 +1,6 @@
 import os
 from argparse import ArgumentParser, Namespace
 from tqdm.auto import tqdm
-from typing import Literal
 import numpy as np
 
 import einops

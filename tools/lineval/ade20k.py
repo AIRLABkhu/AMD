@@ -1,211 +1,150 @@
-import os
-from argparse import ArgumentParser, Namespace
-from tqdm.auto import tqdm
-
-import einops
-
+import os 
+from typing import Literal
+import numpy as np
+from PIL import Image
 import torch
-from torch import nn, optim
-import torch.nn.functional as F
-from torch.optim import lr_scheduler
-from torch import distributed as dist
-from torchmetrics.classification import MulticlassJaccardIndex
+from torch.utils.data import Dataset
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from ._common import make_loader, SafeColorJitter
 
-from mdistiller.dataset.ade_20k import get_ade_20k_dataloaders
-from mdistiller.models._base import ModelBase
-from mdistiller.models import imagenet_model_dict
+# from 
+# https://github.com/yassouali/pytorch-segmentation/blob/master/dataloaders/ade20k.py
 
-from tools.lineval.utils import (
-    init_parser,
-    prepare_lineval_dir,
-    load_from_checkpoint,
-)
-from mdistiller.utils import dist_fn
+DATAROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../data/ade20k')
+MEAN = (0.48897059, 0.46548275, 0.4294)
+STD = (0.22861765, 0.22948039, 0.24054667)
 
-
-# Utility
-
-class SemSegHead(nn.Module):
-    def __init__(self, embed_dim: int, upsample_factor: int=4, num_classes: int=150):
-        super().__init__()
-        self.upsample_factor = upsample_factor
-        self.num_classes = num_classes
-        self.head = nn.Conv2d(embed_dim, num_classes, kernel_size=1)
-
-    def forward(self, feat: torch.Tensor):
-        """
-        feat: (B, N+?, C), ViT final layer output with CLS token
-        Returns:
-            pred_logit: (B, num_bins, H, W)
-        """
-        resolution = int(feat.size(1) ** 0.5)
-        feat = feat[:, -resolution*resolution:]  # (B, N, C)
-
-        feat = einops.rearrange(feat, 'B (H W) C -> B C H W', H=resolution)
-        logit = self.head(feat)  # (B, cls, H, W)
-        upsampled = F.interpolate(
-            logit,
-            scale_factor=self.upsample_factor,
-            mode='bilinear',
-            align_corners=False,
-        )  # (B, cls, H*r, W*r)
-        return upsampled
+COLORMAP = np.array([
+    [120, 120, 120], [180, 120, 120], [  6, 230, 230], [ 80,  50,  50], [  4, 200,   3],
+    [120, 120,  80], [140, 140, 140], [204,   5, 255], [230, 230, 230], [  4, 250,   7],
+    [224,   5, 255], [235, 255,   7], [150,   5,  61], [120, 120,  70], [  8, 255,  51],
+    [255,   6,  82], [143, 255, 140], [204, 255,   4], [255,  51,   7], [204,  70,   3],
+    [  0, 102, 200], [ 61, 230, 250], [255,   6,  51], [ 11, 102, 255], [255,   7,  71],
+    [255,   9, 224], [  9,   7, 230], [220, 220, 220], [255,   9,  92], [112,   9, 255],
+    [  8, 106,  10], [196, 255, 255], [  7, 255, 224], [255, 184,   6], [ 10, 255,  71],
+    [255,  41,  10], [  7, 255, 255], [224, 255,   8], [102,   8, 255], [255,  61,  10],
+    [255, 194,   7], [255, 122,   8], [  0, 255,  20], [255,   8,  41], [255,   5, 153],
+    [  6,  51, 255], [235,  12, 255], [160, 150,  20], [  0, 163, 255], [140, 140, 140],
+    [250,  10,  15], [ 20, 255,   0], [ 31, 255,   0], [255,  31,   0], [255, 224,   0],
+    [153, 255,   0], [  0,  92, 255], [  0, 255,  92], [184,   0, 255], [255,   0, 184],
+    [  0, 184, 255], [  0, 214, 255], [255,   0,  92], [  0, 255, 184], [  0,  31, 255],
+    [255,  31,   0], [255,  15, 153], [  0,  40, 255], [  0, 255, 204], [ 41,   0, 255],
+    [  0, 146, 255], [255, 208,   0], [255, 255,  41], [  0, 255, 204], [  0, 255, 153],
+    [255,  92,   0], [255, 153,   0], [255, 204,   0], [  0, 255, 255], [  0, 153, 255],
+    [  0, 255, 102], [255, 255,   0], [153,   0, 255], [255,   0, 102], [255,   0, 255],
+    [  0, 255,  20], [255, 204,  41], [  0, 255, 153], [  0, 255,   0], [255,  92, 153],
+    [204,   0, 255], [255,  61,  92], [255, 153, 153], [  0,  92, 255], [255, 153,  92],
+    [  0,  20, 255], [153, 255, 204], [  0,  92, 153], [  0, 153, 204], [153, 204, 255],
+    [102, 255, 255], [255, 255, 204], [204, 255, 204], [255, 204, 255], [204, 204, 255],
+    [255, 255, 153], [204, 255, 255], [255, 204, 204], [204, 204, 204], [102, 102, 102],
+    [255, 153, 204], [255, 102, 204], [204, 153, 255], [204, 255, 153], [153, 204, 153],
+    [204, 153, 153], [255, 102, 102], [153, 255, 255], [255, 255, 102], [153, 153, 204],
+    [102, 204, 255], [255, 102, 153], [204, 102, 255], [255, 204, 102], [102, 204, 153],
+    [153, 102, 255], [102, 153, 204], [255, 255, 255], [  0,   0,   0], [  0,   0,  70],
+    [  0,  70,  70], [ 70,   0,  70], [ 70,  70,   0], [ 70,   0,   0], [  0,  70,   0],
+    [210,  70,  70], [210, 210, 210], [ 70, 210, 210], [210,  70, 210], [210, 210,  70],
+    [  0, 128, 128], [128,   0, 128], [128, 128,   0], [128,   0,   0], [  0, 128,   0],
+], dtype=np.uint8)
 
 
-def main(args: Namespace):
-    rank = int(os.environ['LOCAL_RANK'])
-    IS_MASTER = bool(int(os.environ['IS_MASTER_NODE']))
-    DEVICE = rank
-    EPOCHS = args.epochs
-    
-    if IS_MASTER:
-        _, log_filename, best_filename, last_filename = prepare_lineval_dir(
-            args.expname, 
-            tag=str(args.tag), 
-            dataset='ade20k', 
-            args=vars(args)
-        )
-    
-    # DataLoaders, Models
-    train_loader, test_loader, _ = get_ade_20k_dataloaders(
-        args.batch_size//world_size, args.test_batch_size//world_size,
-        args.num_workers, use_ddp=True,
-    )
-    if args.timm_model is not None:
-        print(f"Loading {args.timm_model} from timm")
-        model = imagenet_model_dict[args.timm_model](pretrained=True)
-    else:
-        model, _ = load_from_checkpoint(args.expname, tag=args.tag)
-    model: ModelBase = model.cuda(DEVICE)
-    head = SemSegHead(model.embed_dim, upsample_factor=16).cuda(DEVICE)
-    
-    for param in head.parameters():
-        param.data = param.data.contiguous()
-    
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
-    head = nn.parallel.DistributedDataParallel(head, device_ids=[rank])
-    miou = MulticlassJaccardIndex(150, ignore_index=-1).cuda(rank)
-    optimizer = optim.SGD(
-        head.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
-    scheduler = lr_scheduler.CosineAnnealingLR(
-        optimizer=optimizer,
-        T_max=EPOCHS*len(train_loader),
-        eta_min=1.0E-8,
-    )
-    
-    # Training Loop
-    best_miou = -torch.inf
-    train_loss_list, train_miou_list, test_loss_list, test_imou_list = [], [], [], []
-    for epoch in range(args.epochs):
+def denormalize(x: torch.Tensor):
+    tensor_metadata = dict(dtype=x.dtype, device=x.device)
+    channel_at = np.nonzero(np.array(x.shape) == 3)[0][0]
+    match x.ndim:
+        case 3:
+            stat_shape = [1] * 3
+            stat_shape[channel_at] = 3
+        case 4:
+            stat_shape = [1] * 4
+            stat_shape[channel_at+1] = 3
+        case _:
+            raise RuntimeError
+    mean = torch.tensor(MEAN, **tensor_metadata).reshape(stat_shape)
+    std = torch.tensor(STD, **tensor_metadata).reshape(stat_shape)
+    return x * std + mean
+
+def get_ade20k_train_transform(mean=MEAN, std=STD, img_size: int=224):
+    return A.Compose([
+        A.RandomResizedCrop(size=(img_size, img_size), scale=(0.7, 1.0)),
+        A.HorizontalFlip(p=0.5),
+        SafeColorJitter(
+            brightness=(0.8, 1.2), 
+            contrast=(0.8, 1.2), 
+            saturation=(0.9, 1.1), 
+            hue=(-0.05, 0.05), 
+            p=0.7),
+        A.Normalize(mean=mean, std=std),
+        ToTensorV2(),
+    ], additional_targets={'label': 'mask'})
+
+def get_ade20k_test_transform(mean=MEAN, std=STD, img_size: int=224):
+    return A.Compose([
+        A.SmallestMaxSize(max_size=img_size),
+        A.Resize(height=img_size, width=img_size),
+        A.Normalize(mean=mean, std=std),
+        ToTensorV2(),
+    ], additional_targets={'label': 'mask'})
+
+
+class ADE20k(Dataset):
+    def __init__(
+        self,
+        dataroot: str=DATAROOT,
+        split: Literal['train', 'test']='train',
+        transform=None,
+    ):
+        split_name = {
+            'train': 'training',
+            'test': 'validation',
+        }[split]
+        self.image_root = os.path.join(dataroot, 'images', split_name)
+        self.label_root = os.path.join(dataroot, 'annotations', split_name)
+        self.filenames = sorted(os.path.splitext(fn)[0] for fn in os.listdir(self.image_root))
         
-        with tqdm(train_loader, desc=f'TRAIN {epoch+1}', dynamic_ncols=True, disable=not IS_MASTER) as bar:
-            total_loss, total_miou, total, total_classes = 0, 0, 0, 0
-            for input, target in bar:
-                target = target.long()
-                with torch.no_grad():
-                    x = model.forward(input.cuda(DEVICE))[1]['feats'][-1]
-                pred_logit = head.forward(x)  # (B, 150, H, W)
+        with open(os.path.join(dataroot, 'objectInfo150.txt'), 'r') as file:
+            lines = file.readlines()
+        self.classes = [
+            line.split('\t')[-1].strip()
+            for line in lines
+        ]
 
-                loss = F.cross_entropy(pred_logit, target.cuda(DEVICE), ignore_index=-1)
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-                scheduler.step()
-                
-                with torch.no_grad():
-                    loss = torch.nn.functional.cross_entropy(pred_logit, target.to(DEVICE), ignore_index=-1, reduction='none')
-                    loss_all = dist_fn.gather(loss)
-                    local_miou = miou(pred_logit, target.to(DEVICE))[None]
-                    miou_all = dist_fn.gather(local_miou)
-                    
-                    total_loss += loss_all.mean().cpu().item()
-                    total_miou += miou_all.sum().cpu().item()
-                    total += loss_all.size(0)
-                    total_classes += miou_all.numel()
-                    
-                    if IS_MASTER:
-                        bar.set_postfix(dict(
-                            lr=optimizer.param_groups[0]['lr'],
-                            loss=total_loss/total,
-                            miou=f'{total_miou/total_classes*100:.2f}%',
-                        ))
-            train_miou = total_miou / total_classes
-            train_loss = total_loss / total
-
-        with tqdm(test_loader, desc=f' TEST {epoch+1}', dynamic_ncols=True, disable=not IS_MASTER) as bar, torch.no_grad():
-            total_loss, total_miou, total, total_classes = 0, 0, 0, 0
-            for input, target in bar:
-                target = target.long()
-                x = model.forward(input.cuda(DEVICE))[1]['feats'][-1]
-                pred_logit = head.forward(x) # (B, 150, H, W)
-                
-                loss = torch.nn.functional.cross_entropy(pred_logit, target.to(DEVICE), ignore_index=-1, reduction='none')
-                loss_all = dist_fn.gather(loss)
-                local_miou = miou(pred_logit, target.to(DEVICE))[None]
-                miou_all = dist_fn.gather(local_miou)
-                
-                total_loss += loss_all.mean().cpu().item()
-                total_miou += miou_all.sum().cpu().item()
-                total += loss_all.size(0)
-                total_classes += miou_all.numel()
-                
-                if IS_MASTER:
-                    bar.set_postfix(dict(
-                        loss=total_loss/total,
-                        miou=f'{total_miou/total_classes*100:.2f}%',
-                    ))
-            test_miou = total_miou / total
-            test_loss = total_loss / total
-        
-        # Logging
-        train_loss_list.append(train_loss)
-        train_miou_list.append(train_miou)
-        test_loss_list.append(test_loss)
-        test_imou_list.append(test_miou)
-        
-        if IS_MASTER:
-            with open(log_filename, 'a') as file:
-                print(f'- epoch: {epoch+1}', file=file)
-                print(f'  train_loss: {train_loss:.4f}', file=file)
-                print(f'  train_miou: {train_miou*100:.4f} %', file=file)
-                print(f'  test_loss: {test_loss:.4f}', file=file)
-                print(f'  test_miou: {test_miou*100:.4f} %', file=file)
-                print(file=file)
-            
-            ckpt = dict(
-                epoch=epoch+1,
-                train_loss=train_loss_list,
-                train_rmse=train_miou_list,
-                test_loss=test_loss_list,
-                test_rmse=test_imou_list,
-                head={
-                    key: val.clone().detach().cpu()
-                    for key, val in head.state_dict().items()
-                },
-            )
-            if test_miou > best_miou:
-                best_miou = test_miou
-                torch.save(ckpt, str(best_filename))
-            torch.save(ckpt, str(last_filename))
-
-
-if __name__ == '__main__':
-    parser = ArgumentParser('lineval.ade20k')
-    init_parser(parser, defaults=dict(epochs=1000))
-    args = parser.parse_args()
+        self.num_classes = 150
+        self.transform = transform
     
-    rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
-    os.environ['IS_MASTER_NODE'] = str(int(rank == 0))
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
+    def __len__(self):
+        return len(self.filenames)
     
-    try:
-        main(args)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        dist.destroy_process_group()
+    def __getitem__(self, index: int):
+        image_path = os.path.join(self.image_root, self.filenames[index] + '.jpg')
+        label_path = os.path.join(self.label_root, self.filenames[index] + '.png')
+
+        image = np.asarray(Image.open(image_path).convert('RGB'), dtype=np.float32)
+        label = (np.asarray(Image.open(label_path), dtype=np.int32) - 1)  # from -1 to 149
+        
+        output = self.transform(image=image, label=label)
+        image: np.ndarray = output['image']
+        label: np.ndarray = output['label']
+        
+        match label:
+            case torch.Tensor():
+                label = label.long()
+            case np.ndarray():
+                label = label.astype(np.int64)
+        return image, label
+
+
+def get_ade20k_val_loader(val_batch_size, use_ddp, mean=MEAN, std=STD, img_size: int=224):
+    test_transform = get_ade20k_test_transform(mean, std, img_size=img_size)
+    test_set = ADE20k(split='test', transform=test_transform)
+    test_loader = make_loader(test_set, val_batch_size, num_workers=16, shuffle=False, use_ddp=use_ddp)
+    return test_loader
+
+def get_ade20k_dataloaders(batch_size, val_batch_size, num_workers, use_ddp,
+    mean=MEAN, std=STD, img_size: int=224):
+    train_transform = get_ade20k_train_transform(mean, std, img_size=img_size)
+    train_set = ADE20k(split='train', transform=train_transform)
+    num_data = len(train_set)
+    train_loader = make_loader(train_set, batch_size, num_workers, shuffle=True, use_ddp=use_ddp)
+    test_loader = get_ade20k_val_loader(val_batch_size, use_ddp, mean, std, img_size=img_size)
+    return train_loader, test_loader, num_data
