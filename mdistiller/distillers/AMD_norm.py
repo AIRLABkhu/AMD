@@ -3,15 +3,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ._base import Distiller
-from ._common import get_feat_shapes, SimpleAdapter, make_zscore_mask, make_gaussian_std_mask
+from ._common import (
+    get_feat_shapes,
+    SimpleAdapter,
+    make_zscore_mask,
+    make_gaussian_std_mask,
+    normalize_outlier_artifacts,
+)
 
-class AMD_MASK(Distiller):
+class AMD_NORM(Distiller):
     """Artifact Manipulating Distillation"""
     def __init__(self, student, teacher, cfg):
-        super(AMD_MASK, self).__init__(student, teacher)
+        super(AMD_NORM, self).__init__(student, teacher)
         self.feat_loss_weight = cfg.AMD.LOSS.FEAT_WEIGHT
         self.m_layers = cfg.AMD.M_LAYERS + [len(self.teacher.get_layers()) - 1]
-        self.align_type = cfg.AMD.ALIGN_TYPE
         feat_s_shapes, feat_t_shapes = get_feat_shapes(
             self.student, self.teacher, cfg.AMD.INPUT_SIZE
         )
@@ -48,23 +53,19 @@ class AMD_MASK(Distiller):
         for m_l in self.m_layers:
             f_s = feature_student["feats"][m_l]
             f_t = feature_teacher["feats"][m_l]
-            if self.af_enabled:
-                match self.af_type:
-                    case 'zscore':
-                        outlier_mask = make_zscore_mask(f_t, threshold=self.af_threshold)
-                    case 'gaussian_std':
-                        outlier_mask = make_gaussian_std_mask(f_t)
-                    case _:
-                        raise NotImplementedError(self.af_type)
-                inlier_bool_mask = outlier_mask.bool().logical_not()
-                f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
-                f_s_inliers = f_s[inlier_bool_mask]
-                f_t_inliers = f_t[inlier_bool_mask]
-                loss_feat_mse = F.mse_loss(f_s_inliers, f_t_inliers)
-                loss_feat = loss_feat + loss_feat_mse
-            else:
-                f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
-                loss_feat = loss_feat + F.mse_loss(f_s, f_t)
+            match self.af_type:
+                case 'zscore':
+                    outlier_mask = make_zscore_mask(f_t, threshold=self.af_threshold)
+                case 'gaussian_std':
+                    outlier_mask = make_gaussian_std_mask(f_t)
+                case _:
+                    raise NotImplementedError(self.af_type)
+            # normalized f_t outlier
+            f_t = normalize_outlier_artifacts(f_t, outlier_mask)
+            f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
+            loss_feat_mse = F.mse_loss(f_s, f_t)
+            loss_feat = loss_feat + loss_feat_mse
+
         loss_feat = self.feat_loss_weight * loss_feat / len(self.m_layers) 
 
         losses_dict = {

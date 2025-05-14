@@ -15,6 +15,7 @@ from .DKD import DKD
 from .FitViT import FitViT
 from .AMD_mask import AMD_MASK
 from .AMD_recon import AMD_RECON
+from .AMD_norm import AMD_NORM
 
 distiller_dict = {
     "NONE": Vanilla,
@@ -34,4 +35,5 @@ distiller_dict = {
     "FITVIT": FitViT,
     "AMD_MASK": AMD_MASK,
     "AMD_RECON": AMD_RECON,
+    "AMD_NORM": AMD_NORM,
 }

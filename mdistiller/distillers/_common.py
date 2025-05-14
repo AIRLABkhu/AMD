@@ -43,7 +43,7 @@ class SimpleAdapter(nn.Module):
         return x
 
 @torch.no_grad()
-def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=True, alpha: float=1.0):
+def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=True, alpha: float=1.0, except_cls: bool=True):
     '''
     :input:
         data: batch, spatial, channel
@@ -63,7 +63,77 @@ def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=Tr
         threshold = (threshold * (1 + alpha * std_z)).clamp(max=6.0)
         
     outlier_mask = torch.abs(modified_z) > threshold
+    if except_cls:
+        outlier_mask[:, 0].fill_(0.0)
     return outlier_mask.to(dtype=data.dtype, device=data.device)
+
+@torch.no_grad()
+def make_gaussian_std_mask(x: torch.Tensor, threshold: float=2.0, eps: float=1.0E-8, except_cls: bool=True):
+    '''
+    :input:
+        data: batch, spatial, channel
+        
+    :returns:
+        a tensor with shape (batch, spatial). 
+        contains one on outliers, zero, otherwise.
+    '''
+    x = x.norm(dim=-1)
+    std, mean = torch.std_mean(x, dim=1, keepdim=True)
+    x_normalized = (x - mean) / (std + eps)
+    outlier_mask = x_normalized > threshold
+    if except_cls:
+        outlier_mask[:, 0].fill_(0.0)
+    return outlier_mask.to(dtype=x.dtype, device=x.device)
+
+@torch.no_grad()
+def masked_std_mean(x: torch.Tensor, mask: torch.Tensor, keepdim: bool=False, unbiased: bool=True):
+    indices = mask.nonzero()
+    mask_nan = torch.sparse_coo_tensor(
+        indices=indices.T,
+        values=torch.full(size=(len(indices),), fill_value=torch.nan),
+        size=mask.shape,
+        dtype=mask.dtype,
+        device=mask.device,
+    ).to_dense()
+    x_masked = x + mask_nan.unsqueeze(-1)
+    x_mean = x_masked.nanmean(dim=1, keepdim=True)  # B, 1, C
+    
+    x_centered = torch.square(x_masked - x_mean)  # ..................| B, P, C
+    valid_count = (1.0 - mask).sum(dim=1, keepdim=True)  # ...........| B, 1
+    squared_sum = torch.nansum(x_centered, dim=1, keepdim=True)  # ...| B, 1, C
+
+    denom = valid_count - (1 if unbiased else 0)
+    x_std = torch.sqrt(squared_sum / denom.unsqueeze(-1))
+    
+    x_mean[torch.isnan(x_std)].fill_(0.0)
+    x_std = x_std.nan_to_num(1.0) 
+
+    if keepdim:
+        return x_std, x_mean
+    else:
+        return x_std.squeeze(), x_mean.squeeze()
+
+def normalize_outlier_artifacts(x: torch.Tensor, outlier_mask: torch.Tensor, eps:float=1.0E-8):
+    '''
+    :input:
+        x: torch.Tensor with shape (B, P, C).
+        mask: torch.Tensor with shape (B, P).
+    
+    :returns:
+        a tensor with shape (B, P, C) with normalized outliers. 
+    '''
+    outlier_mask = outlier_mask.clone()
+    inlier_mask = 1.0 - outlier_mask
+    inlier_mask[:, 0].fill_(0.0)
+    outlier_mask[:, 0].fill_(1.0)
+    std_out, mean_out = masked_std_mean(x, inlier_mask, keepdim=True)
+    std_in, mean_in = masked_std_mean(x, outlier_mask, keepdim=True)
+    # normalized outliers only
+    outlier_mask = outlier_mask.unsqueeze(-1)
+    inlier_mask = inlier_mask.unsqueeze(-1)
+    normalized_x = (x - mean_out) * std_in / (std_out + eps) + mean_in
+    return (x * inlier_mask) + (normalized_x * outlier_mask)
+
 
 # reconMHA module
 class ReconMHA(nn.MultiheadAttention):
@@ -121,7 +191,7 @@ class ReconMHA(nn.MultiheadAttention):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)  # ViT-style initialization
         
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, outlier_mask: torch.Tensor|None=None, ignore_outliers: bool=True):
         '''
         :parameters:
         
@@ -141,11 +211,14 @@ class ReconMHA(nn.MultiheadAttention):
                 One implies that the patch is randomly selected to be masked. 
                 This will be returned only in the training mode. 
         '''
-        outlier_mask = make_zscore_mask(
-            data=x, 
-            threshold=self.base_threshold, 
-            adaptive=self.adaptive_threshold,
-        ).unsqueeze(-1)
+        if outlier_mask is None:
+            outlier_mask = make_zscore_mask(
+                data=x, 
+                threshold=self.base_threshold, 
+                adaptive=self.adaptive_threshold,
+            )
+            
+        outlier_mask = outlier_mask.unsqueeze(-1)
         inlier_mask = 1 - outlier_mask
         
         if self.training:
@@ -155,12 +228,15 @@ class ReconMHA(nn.MultiheadAttention):
                 random_indices.T, values=torch.ones(len(random_indices)), size=outlier_mask.shape[:2],
                 dtype=random_indices.dtype, device=random_indices.device,
             ).to_dense().unsqueeze(-1)
-            x_ready = torch.add(
-                x * (inlier_mask - random_mask),
-                self.recon_token * (outlier_mask + random_mask),
-            )
+            x_mask = inlier_mask - random_mask
+            r_mask = outlier_mask + random_mask
         else:
-            x_ready = (x * inlier_mask) + (self.recon_token * outlier_mask)
+            x_mask = inlier_mask
+            r_mask = outlier_mask
+        
+        if not ignore_outliers:
+            x_mask = 1.0
+        x_ready = torch.add(x * x_mask, self.recon_token * r_mask)
         
         x_ready = x_ready + self.pos_embed
         if self.training:
