@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ._base import Distiller
-from ._common import get_feat_shapes, SimpleAdapter, ReconMHA
+from ._common import get_feat_shapes, SimpleAdapter, ReconMHA, make_zscore_mask, make_gaussian_std_mask, normalize_outlier_artifacts
 
 class AMD_RECON(Distiller):
     """Artifact Manipulating Distillation"""
@@ -21,6 +21,7 @@ class AMD_RECON(Distiller):
         self.af_type = cfg.AMD.AF.CRITERIA.TYPE
         self.af_threshold = cfg.AMD.AF.CRITERIA.THRES
         self.af_recon_type = cfg.AMD.AF.RECON.TYPE
+        self.af_norm_outlier = cfg.AMD.AF.OUT_NORM
         
         # Adapters from Student to Teacher
         self.adapter_dict = nn.ModuleDict({
@@ -69,9 +70,22 @@ class AMD_RECON(Distiller):
         for m_l in self.m_layers:
             f_s = feature_student["feats"][m_l]
             f_t = feature_teacher["feats"][m_l]
+            
+            # for get mask first
+            match self.af_type:
+                case 'zscore':
+                    outlier_mask = make_zscore_mask(f_t, threshold=self.af_threshold)
+                case 'gaussian_std':
+                    outlier_mask = make_gaussian_std_mask(f_t)
+                case _:
+                    raise NotImplementedError(self.af_type)
+            
             match self.af_recon_type:
                 case 'recon_mha':
-                    (recon_f_t, _) , outlier_mask, _ = self.reconstructor_dict[f"recon_mha_{m_l:03d}"](f_t)
+                    if self.af_norm_outlier:
+                        f_t = normalize_outlier_artifacts(f_t, outlier_mask)
+                    ignore_outliers = not self.af_norm_outlier
+                    (recon_f_t, _) , outlier_mask, _ = self.reconstructor_dict[f"recon_mha_{m_l:03d}"](f_t, outlier_mask, ignore_outliers=ignore_outliers)
                     proj_f_s = self.adapter_dict[f"adapter_{m_l:03d}"](f_s)
                     match self.align_type:
                         case 'cosine':
