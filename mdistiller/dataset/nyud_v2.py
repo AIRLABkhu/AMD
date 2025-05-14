@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from ._common import make_loader
+from ._common import make_loader, SafeColorJitter
 
 
 DATAROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../data/nyud')
@@ -33,12 +33,12 @@ def denormalize(x: torch.Tensor):
 def get_nyud_train_transform(mean=MEAN, std=STD):
     return A.Compose([
         A.HorizontalFlip(p=0.5),
-        A.ColorJitter(
-            brightness=0.2, 
-            contrast=0.2, 
-            saturation=0.1, 
-            hue=0.05, 
-            p=0.5),
+        SafeColorJitter(
+            brightness=(0.8, 1.2), 
+            contrast=(0.8, 1.2), 
+            saturation=(0.9, 1.1), 
+            hue=(-0.05, 0.05), 
+            p=0.7),
         A.Normalize(mean=mean, std=std),
         ToTensorV2(),
     ], additional_targets={'depth': 'mask'})
