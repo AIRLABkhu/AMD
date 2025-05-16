@@ -75,7 +75,7 @@ def main(args: Namespace):
     head_state_dict = load_head_checkpoint(
         args.expname, tag=args.tag, 
         when=args.lineval_when, dataset='nyud',
-        lineval_tag='best'
+        lineval_tag=args.lineval_tag
     )['head']
     head_state_dict = {
         key.replace('module.', ''): val
@@ -117,6 +117,7 @@ if __name__ == '__main__':
     init_parser(parser, defaults=dict(batch_size=16))
     parser.add_argument('--temperature', '-T', type=float, default=0.03)
     parser.add_argument('--lineval-when', '-lw', type=str, default=None)
+    parser.add_argument('--lineval-tag', '-lt', type=str, default='best')
     args = parser.parse_args()
     
     try:

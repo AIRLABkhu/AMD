@@ -81,7 +81,7 @@ CFG.LOG.WANDB = False
 """Artifact Manipulating Distillation"""
 CFG.AMD = CN()
 CFG.AMD.M_LAYERS = [5]  # manipulating layers
-CFG.AMD.ALIGN_TYPE = 'cosine'  # 'cosine', 'mse', 'both'
+CFG.AMD.ALIGN_TYPE = 'mse'  # 'cosine', 'mse', 'both'
 CFG.AMD.INPUT_SIZE = [224, 224]
 CFG.AMD.AF = CN()
 CFG.AMD.AF.ENABLE = True
