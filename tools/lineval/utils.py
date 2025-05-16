@@ -71,7 +71,7 @@ def load_head_checkpoint(
     when: str|None=None,
     lineval_tag: Literal['last', 'best']|int='last',
 ):
-    filename = os.path.join('output', exp_name, 'lineval', tag)
+    filename = os.path.join('output', exp_name, 'lineval', str(tag))
     if when is None:
         dirname = sorted(filter(lambda x: x.startswith(f'{dataset}_'), os.listdir(filename)))[-1]
         filename = os.path.join(filename, dirname)

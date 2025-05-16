@@ -70,7 +70,7 @@ def make_zscore_mask(data: torch.Tensor, threshold: float=5.5, adaptive: bool=Tr
 @torch.no_grad()
 def make_gaussian_std_mask(x: torch.Tensor, threshold: float=2.0, eps: float=1.0E-8, except_cls: bool=True):
     '''
-    :input:
+    :params:
         data: batch, spatial, channel
         
     :returns:
